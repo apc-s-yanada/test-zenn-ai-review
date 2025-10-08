@@ -1,7 +1,7 @@
 ---
 ---
 title: "VMとロードバランサを主に使ってたインフラ系エンジニアが、AKSのネットワークに入門したら"
-emoji: "⭐️"
+emoji: "🦁"
 type: "tech"
 topics: ["Azure", "Kubernetes", "AKS", "Network"]
 published: false
