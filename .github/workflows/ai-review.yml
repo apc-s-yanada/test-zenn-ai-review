@@ -29,57 +29,49 @@ jobs:
           echo "$DIFF" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
-      # 3. OpenAI APIを呼び出してレビューを依頼
+# 3. OpenAI APIを呼び出してレビューを依頼 (curlを使用する安定版)
       - name: Call OpenAI API for Review
         id: openai_review
-        uses: actions/github-script@v7
-        with:
-          script: |
-            // OpenAIのAPIキーを環境変数から取得
-            const apiKey = process.env.OPENAI_API_KEY;
-            // 前のステップで取得した差分内容を取得
-            const diffContent = process.env.diff_content;
+        run: |
+          # レビュー観点を定義するプロンプト
+          PROMPT="""
+          あなたは優秀な日本語テクニカルエディターです。
+          以下のGitの差分テキストをレビューし、Zennの記事として品質を向上させるためのフィードバックをしてください。
 
-            // レビュー観点を定義するプロンプト
-            const prompt = `
-            あなたは優秀な日本語テクニカルエディターです。
-            以下のGitの差分テキストをレビューし、Zennの記事として品質を向上させるためのフィードバックをしてください。
+          # レビュー観点
+          - 誤字脱字や文法的な誤り
+          - 不自然な日本語の表現
+          - 表記ゆれ（例：「ですます調」と「だである調」の混在など）
+          - 技術用語の不適切な使用
+          - より分かりやすく、簡潔にするための表現の提案
 
-            # レビュー観点
-            - 誤字脱字や文法的な誤り
-            - 不自然な日本語の表現
-            - 表記ゆれ（例：「ですます調」と「だである調」の混在など）
-            - 技術用語の不適切な使用
-            - より分かりやすく、簡潔にするための表現の提案
+          # 出力形式
+          - 指摘事項がない場合は、「レビューの結果、問題は見つかりませんでした。」とだけ出力してください。
+          - 指摘事項がある場合は、具体的な修正案を箇条書きで簡潔に示してください。
 
-            # 出力形式
-            - 指摘事項がない場合は、「レビューの結果、問題は見つかりませんでした。」とだけ出力してください。
-            - 指摘事項がある場合は、具体的な修正案を箇条書きで簡潔に示してください。
+          # Git差分
+          ${{ env.diff_content }}
+          """
 
-            # Git差分
-            ${diffContent}
-            `;
+          # OpenAIに送るJSONデータを作成
+          JSON_PAYLOAD=$(jq -n \
+            --arg model "gpt-4o" \
+            --arg content "$PROMPT" \
+            '{model: $model, messages: [{role: "user", content: $content}]}')
 
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
-              },
-              body: JSON.stringify({
-                model: 'gpt-4o', // 使用するモデル
-                messages: [{ role: 'user', content: prompt }]
-              })
-            });
-
-            const data = await response.json();
-            const reviewComment = data.choices[0].message.content;
+          # curlコマンドでAPIを呼び出し、結果を変数に格納
+          API_RESPONSE=$(curl -s -X POST "https://api.openai.com/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
+            -d "$JSON_PAYLOAD")
             
-            // 次のステップで使えるように結果をoutputにセット
-            core.setOutput('comment', reviewComment);
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
+          # 返ってきたJSONからレビューコメント部分だけを抽出
+          REVIEW_COMMENT=$(echo "$API_RESPONSE" | jq -r '.choices[0].message.content')
+          
+          # 次のステップで使えるように結果をoutputにセット
+          echo "comment<<EOF" >> $GITHUB_OUTPUT
+          echo "$REVIEW_COMMENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
       # 4. レビュー結果をプルリクエストにコメントとして投稿
       - name: Post Review Comment
         uses: actions/github-script@v7
