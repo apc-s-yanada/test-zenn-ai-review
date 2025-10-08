@@ -19,52 +19,32 @@ jobs:
         with:
           fetch-depth: 0 # 差分比較のために全履歴を取得
 
-      # 2. 変更があったファイルの内容を取得
-      - name: Get PR diff
-        id: pr_diff
+      # 2. 変更があったファイルの内容をファイルに保存
+      - name: Get PR diff and save to file
         run: |
-          # mainブランチとの差分を取得し、環境変数にセット
-          DIFF=$(git diff origin/main...HEAD)
-          echo "diff_content<<EOF" >> $GITHUB_ENV
-          echo "$DIFF" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          git diff origin/master...HEAD > diff.txt
 
-# 3. OpenAI APIを呼び出してレビューを依頼 (curlを使用する安定版)
+      # 3. OpenAI APIを呼び出してレビューを依頼 (jqの構文エラー対策版)
       - name: Call OpenAI API for Review
         id: openai_review
         run: |
-          # レビュー観点を定義するプロンプト
-          PROMPT="""
-          あなたは優秀な日本語テクニカルエディターです。
-          以下のGitの差分テキストをレビューし、Zennの記事として品質を向上させるためのフィードバックをしてください。
-
-          # レビュー観点
-          - 誤字脱字や文法的な誤り
-          - 不自然な日本語の表現
-          - 表記ゆれ（例：「ですます調」と「だである調」の混在など）
-          - 技術用語の不適切な使用
-          - より分かりやすく、簡潔にするための表現の提案
-
-          # 出力形式
-          - 指摘事項がない場合は、「レビューの結果、問題は見つかりませんでした。」とだけ出力してください。
-          - 指摘事項がある場合は、具体的な修正案を箇条書きで簡潔に示してください。
-
-          # Git差分
-          ${{ env.diff_content }}
-          """
-
-          # OpenAIに送るJSONデータを作成
-          JSON_PAYLOAD=$(jq -n \
+          # jqの --rawfile オプションを使い、diff.txtの中身を安全に読み込む
+          API_RESPONSE=$(jq -n \
             --arg model "gpt-4o" \
-            --arg content "$PROMPT" \
-            '{model: $model, messages: [{role: "user", content: $content}]}')
+            --rawfile diff_content diff.txt \
+            '{
+              "model": $model,
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "あなたは優秀な日本語テクニカルエディターです。\n以下のGitの差分テキストをレビューし、Zennの記事として品質を向上させるためのフィードバックをしてください。\n\n# レビュー観点\n- 誤字脱字や文法的な誤り\n- 不自然な日本語の表現\n- 表記ゆれ（例：「ですます調」と「だである調」の混在など）\n- 技術用語の不適切な使用\n- より分かりやすく、簡潔にするための表現の提案\n\n# 出力形式\n- 指摘事項がない場合は、「レビューの結果、問題は見つかりませんでした。」とだけ出力してください。\n- 指摘事項がある場合は、具体的な修正案を箇条書きで簡潔に示してください。\n\n# Git差分\n" + $diff_content
+                }
+              ]
+            }' | curl -s -X POST "https://api.openai.com/v1/chat/completions" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
+              -d @-)
 
-          # curlコマンドでAPIを呼び出し、結果を変数に格納
-          API_RESPONSE=$(curl -s -X POST "https://api.openai.com/v1/chat/completions" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
-            -d "$JSON_PAYLOAD")
-            
           # 返ってきたJSONからレビューコメント部分だけを抽出
           REVIEW_COMMENT=$(echo "$API_RESPONSE" | jq -r '.choices[0].message.content')
           
