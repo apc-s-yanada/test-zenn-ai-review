@@ -24,11 +24,11 @@ jobs:
         run: |
           git diff origin/main...HEAD > diff.txt
 
-      # 3. OpenAI APIを呼び出してレビューを依頼 (jqの構文エラー対策版)
+      # 3. OpenAI APIを呼び出してレビューを依頼 (デバッグ版)
       - name: Call OpenAI API for Review
         id: openai_review
         run: |
-          # jqの --rawfile オプションを使い、diff.txtの中身を安全に読み込む
+          # (jqとcurlのコマンドは変更なし)
           API_RESPONSE=$(jq -n \
             --arg model "gpt-4o" \
             --rawfile diff_content diff.txt \
@@ -44,6 +44,11 @@ jobs:
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
               -d @-)
+
+          # ↓↓↓ デバッグ用に、APIからの生の返答をログに出力する3行を追加 ↓↓↓
+          echo "--- OpenAI API Response ---"
+          echo "$API_RESPONSE"
+          echo "--------------------------"
 
           # 返ってきたJSONからレビューコメント部分だけを抽出
           REVIEW_COMMENT=$(echo "$API_RESPONSE" | jq -r '.choices[0].message.content')
