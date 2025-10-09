@@ -17,81 +17,87 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 差分比較のために全履歴を取得
+          fetch-depth: 0
 
-      # 2. 変更があったファイルの内容を取得
-      - name: Get PR diff
-        id: pr_diff
+      # 2. 変更があった行（追加された行のみ）をファイルに保存
+      - name: Get added lines from diff and save to file
         run: |
-          # mainブランチとの差分を取得し、環境変数にセット
-          DIFF=$(git diff origin/main...HEAD)
-          echo "diff_content<<EOF" >> $GITHUB_ENV
-          echo "$DIFF" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          git fetch origin ${{ github.base_ref }}
+          git diff origin/${{ github.base_ref }}...HEAD --unified=0 | grep '^+' | sed 's/^+//' | grep -v '^++' > diff.txt
 
-      # 3. OpenAI APIを呼び出してレビューを依頼
+      # 3. 【安全装置】差分の文字数をチェック
+      - name: Check diff size
+        id: check_size
+        run: |
+          CHAR_COUNT=$(wc -m < diff.txt)
+          LIMIT=15000
+          echo "Character count: $CHAR_COUNT"
+          if [ "$CHAR_COUNT" -gt "$LIMIT" ]; then
+            echo "is_too_large=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_too_large=false" >> $GITHUB_OUTPUT
+          fi
+
+      # 4. (差分が小さい場合のみ) AI APIを呼び出してレビューを依頼
       - name: Call OpenAI API for Review
         id: openai_review
-        uses: actions/github-script@v7
-        with:
-          script: |
-            // OpenAIのAPIキーを環境変数から取得
-            const apiKey = process.env.OPENAI_API_KEY;
-            // 前のステップで取得した差分内容を取得
-            const diffContent = process.env.diff_content;
+        if: steps.check_size.outputs.is_too_large == 'false'
+        run: |
+          PROMPT_TEMPLATE="あなたは優秀な日本語テクニカルエディターです。
+          以下にGitの差分から抽出した「追加された行」だけを提示します。これらの新しく追加された行について、レビューを行い、フィードバックをしてください。
+          # レビュー観点
+          - 誤字脱字や文法的な誤り
+          - 不自然な日本語の表現
+          - 表記ゆれ
+          - 技術用語の不適切な使用
+          # 出力形式
+          - 指摘事項がない場合は、「レビューの結果、問題は見つかりませんでした。」とだけ出力してください。
+          - 指摘事項がある場合は、具体的な修正案を箇条書きで簡潔に示してください。
+          # 今回追加された行
+          "
+          
+          API_RESPONSE=$(jq -n \
+            --arg model "gpt-4o" \
+            --arg prompt_template "$PROMPT_TEMPLATE" \
+            --rawfile diff_content diff.txt \
+            '{
+              "model": $model,
+              "messages": [
+                {
+                  "role": "user",
+                  "content": ($prompt_template + $diff_content)
+                }
+              ]
+            }' | curl -s -X POST "https://api.openai.com/v1/chat/completions" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
+              -d @-)
+          
+          echo "--- OpenAI API Response ---"
+          echo "$API_RESPONSE"
+          echo "--------------------------"
+          
+          REVIEW_COMMENT=$(echo "$API_RESPONSE" | jq -r '.choices[0].message.content')
+          echo "comment<<EOF" >> $GITHUB_OUTPUT
+          echo "$REVIEW_COMMENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-            // レビュー観点を定義するプロンプト
-            const prompt = `
-            あなたは優秀な日本語テクニカルエディターです。
-            以下のGitの差分テキストをレビューし、Zennの記事として品質を向上させるためのフィードバックをしてください。
-
-            # レビュー観点
-            - 誤字脱字や文法的な誤り
-            - 不自然な日本語の表現
-            - 表記ゆれ（例：「ですます調」と「だである調」の混在など）
-            - 技術用語の不適切な使用
-            - より分かりやすく、簡潔にするための表現の提案
-
-            # 出力形式
-            - 指摘事項がない場合は、「レビューの結果、問題は見つかりませんでした。」とだけ出力してください。
-            - 指摘事項がある場合は、具体的な修正案を箇条書きで簡潔に示してください。
-
-            # Git差分
-            ${diffContent}
-            `;
-
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
-              },
-              body: JSON.stringify({
-                model: 'gpt-4o', // 使用するモデル
-                messages: [{ role: 'user', content: prompt }]
-              })
-            });
-
-            const data = await response.json();
-            const reviewComment = data.choices[0].message.content;
-            
-            // 次のステップで使えるように結果をoutputにセット
-            core.setOutput('comment', reviewComment);
+      # 5. レビュー結果、または警告メッセージをプルリクエストにコメントとして投稿 (最終版)
+      - name: Post Comment
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
-      # 4. レビュー結果をプルリクエストにコメントとして投稿
-      - name: Post Review Comment
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            // 前のステップのレビュー結果を取得
-            const reviewComment = "${{ steps.openai_review.outputs.comment }}";
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `### 🤖 AIによるレビュー結果\n\n${reviewComment}`
-            });
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "${{ steps.check_size.outputs.is_too_large }}" == "true" ]; then
+            COMMENT_BODY="### ⚠️ AIレビューのスキップ
+            今回のコミットの差分が大きすぎるため（15,000文字以上）、AIによるレビューをスキップしました。
+            記事をいくつかのセクションに分け、コミットを分割して再度プッシュしてください。"
+          else
+            # AIレビュー結果を変数に格納 (ghコマンドのエラー対策)
+            COMMENT_BODY_FROM_AI="${{ steps.openai_review.outputs.comment }}"
+            COMMENT_BODY="### 🤖 AIによるレビュー結果
+            $COMMENT_BODY_FROM_AI"
+          fi
+          
+          # ghコマンドを使って安全にコメントを投稿する
+          gh pr comment $PR_NUMBER --body "$COMMENT_BODY"
