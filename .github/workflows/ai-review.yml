@@ -22,7 +22,7 @@ jobs:
       # 2. 変更があったファイルの内容をファイルに保存
       - name: Get PR diff and save to file
         run: |
-          git diff origin/master...HEAD > diff.txt
+          git diff origin/main...HEAD > diff.txt
 
       # 3. OpenAI APIを呼び出してレビューを依頼 (jqの構文エラー対策版)
       - name: Call OpenAI API for Review
