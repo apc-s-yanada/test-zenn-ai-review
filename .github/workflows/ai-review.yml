@@ -95,3 +95,23 @@ jobs:
               issue_number: context.issue.number,
               body: `### 🤖 AIによるレビュー結果\n\n${reviewComment}`
             });
+
+      # 5. レビュー結果、または警告メッセージをプルリクエストにコメントとして投稿 (最終版)
+      - name: Post Comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "${{ steps.check_size.outputs.is_too_large }}" == "true" ]; then
+            # 差分が大きすぎた場合の警告メッセージ
+            COMMENT_BODY="### ⚠️ AIレビューのスキップ
+            今回のコミットの差分が大きすぎるため（15,000文字以上）、AIによるレビューをスキップしました。
+            記事をいくつかのセクションに分け、コミットを分割して再度プッシュしてください。"
+          else
+            # 正常なAIレビュー結果
+            COMMENT_BODY="### 🤖 AIによるレビュー結果
+            ${{ steps.openai_review.outputs.comment }}"
+          fi
+          
+          # ghコマンドを使って安全にコメントを投稿する
+          gh pr comment $PR_NUMBER --body "$COMMENT_BODY"
