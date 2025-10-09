@@ -31,7 +31,8 @@ jobs:
       - name: Call OpenAI API for Review
         id: openai_review
         run: |
-          PROMPT_TEMPLATE="あなたは優秀な日本語テクニカルエディターです。
+          cat > prompt_template.txt << 'EOF'
+          あなたは優秀な日本語テクニカルエディターです。
           以下にGitの差分から抽出した「追加された行」だけを提示します。これらの新しく追加された行について、レビューを行い、フィードバックをしてください。
 
           # レビュー観点
@@ -46,11 +47,11 @@ jobs:
           - 指摘事項がある場合は、具体的な修正案を箇条書きで簡潔に示してください。
 
           # 今回追加された行
-          "
+          EOF
           
           API_RESPONSE=$(jq -n \
             --arg model "gpt-4o" \
-            --arg prompt_template "$PROMPT_TEMPLATE" \
+            --rawfile prompt_template prompt_template.txt \
             --rawfile diff_content diff.txt \
             '{
               "model": $model,
