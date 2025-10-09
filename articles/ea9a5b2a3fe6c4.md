@@ -6,7 +6,7 @@ topics: ["Azure", "Kubernetes", "AKS", "Network"]
 published: false
 ---
 
-## はじめに
+## こんにちわ
 
 こんにちわ、ACS事業部 SAT室 Engineering推進の簗田(やなだ)です。
 2025年9月にエーピーコミュニケーションズに入社しました。
